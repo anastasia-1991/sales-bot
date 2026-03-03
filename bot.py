@@ -20,7 +20,6 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font
 from telegram import Bot
 
-# ── Настройки ──────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN   = os.environ['TELEGRAM_TOKEN']
 TELEGRAM_CHAT_ID = os.environ['TELEGRAM_CHAT_ID']
 EMAIL_ADDRESS    = os.environ['EMAIL_ADDRESS']
@@ -31,13 +30,11 @@ SENT_LOG         = 'sent_reports.json'
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger(__name__)
 
-# ── Цвета ──────────────────────────────────────────────────────────────────────
 GREEN_FILL  = PatternFill('solid', fgColor='70AD47')
 YELLOW_FILL = PatternFill('solid', fgColor='FFD966')
 RED_FILL    = PatternFill('solid', fgColor='FF7070')
 NO_FILL     = PatternFill('none')
 
-# ── Общая логика заливки ───────────────────────────────────────────────────────
 def is_dash(val):
     if val is None: return True
     return str(val).strip() in ('-', '—', '')
@@ -88,7 +85,6 @@ def get_color(val, t, is_zero_red):
         if v in t.get('bot', set()): return RED_FILL
         return YELLOW_FILL
 
-# ── Почасовой отчёт ────────────────────────────────────────────────────────────
 H_COLS = [
     'План, %', 'КОП', 'КОП к Нед.', 'КОП к Вчера',
     'ПвЧ', 'ПвЧ к Нед.', 'Штук в чеке',
@@ -170,7 +166,6 @@ def process_hourly(xlsx_bytes):
     for sn in wb.sheetnames: color_hourly_sheet(wb[sn])
     buf = io.BytesIO(); wb.save(buf); return buf.getvalue()
 
-# ── Дневной/Недельный/Месячный отчёт ──────────────────────────────────────────
 D_COLS = {
     'План %', 'Рост к периоду в ТО', 'ТО LFL',
     'ТО/посетитель', 'ТО/посетитель LFL',
@@ -258,101 +253,52 @@ def process_day(xlsx_bytes):
     for sn in wb.sheetnames: color_day_sheet(wb[sn])
     buf = io.BytesIO(); wb.save(buf); return buf.getvalue()
 
-# ── Извлечение периода из отчёта ───────────────────────────────────────────────
 def extract_period(ws, report_type):
-    """
-    Возвращает строку периода для анализа.
-    Row1: 'Период отчета: 25.02.2026. Сформирован ...'
-    Row2: 'Период прошедший: 18.02.2026'
-    report_type: 'week' | 'month_mid' | 'month_full'
-    """
     def get_date(row):
         val = str(ws.cell(row, 1).value or '')
         parts = val.split(':')[-1].strip().split('.')
-        if len(parts) >= 3:
-            return '.'.join(parts[:3])
+        if len(parts) >= 3: return '.'.join(parts[:3])
         return val.split('.')[0].strip()
+    end_date = get_date(1); start_date = get_date(2)
+    MONTHS_RU = {1:'январь',2:'февраль',3:'март',4:'апрель',5:'май',6:'июнь',
+                 7:'июль',8:'август',9:'сентябрь',10:'октябрь',11:'ноябрь',12:'декабрь'}
+    if report_type == 'week': return f"{start_date}–{end_date}"
+    try:
+        parts = end_date.split('.')
+        month = int(parts[1]); year = parts[2]
+        return f"{MONTHS_RU.get(month, str(month))} {year} ({start_date}–{end_date})"
+    except: return f"{start_date}–{end_date}"
 
-    end_date   = get_date(1)   # дата отчёта (конец периода)
-    start_date = get_date(2)   # начало периода
-
-    MONTHS_RU = {
-        1:'январь',2:'февраль',3:'март',4:'апрель',
-        5:'май',6:'июнь',7:'июль',8:'август',
-        9:'сентябрь',10:'октябрь',11:'ноябрь',12:'декабрь'
-    }
-
-    if report_type == 'week':
-        return f"{start_date}–{end_date}"
-
-    elif report_type in ('month_mid', 'month_full'):
-        # Пытаемся распарсить месяц из даты отчёта
-        try:
-            parts = end_date.split('.')
-            month = int(parts[1]); year = parts[2]
-            month_name = MONTHS_RU.get(month, str(month))
-            return f"{month_name} {year} ({start_date}–{end_date})"
-        except:
-            return f"{start_date}–{end_date}"
-
-    return end_date
-
-# ── Анализ ─────────────────────────────────────────────────────────────────────
 def generate_analysis(xlsx_bytes, report_type='week'):
-    """
-    report_type:
-      'week'       → "за неделю DD.MM–DD.MM.YYYY", после ТО: пишет сам % без пометки
-      'month_mid'  → "за месяц ...", после ТО: "исправить"
-      'month_full' → "за месяц ...", после ТО: "так и не исправлено:"
-    """
     wb = load_workbook(io.BytesIO(xlsx_bytes))
-
-    # Находим лист с данными
     ws = None
     for sn in wb.sheetnames:
         sheet = wb[sn]
         for r in sheet.iter_rows():
             for c in r:
-                if c.value and str(c.value).strip() == 'Магазин':
-                    ws = sheet; break
+                if c.value and str(c.value).strip() == 'Магазин': ws=sheet; break
             if ws: break
         if ws: break
     if not ws: return ''
-
     hrow = None
     for r in ws.iter_rows():
         for c in r:
-            if c.value and str(c.value).strip() == 'Магазин':
-                hrow = c.row; break
+            if c.value and str(c.value).strip() == 'Магазин': hrow=c.row; break
         if hrow: break
     if not hrow: return ''
-
     ho = {norm(c.value): c.column for c in ws[hrow] if c.value}
-    mc  = ho.get('Магазин');       tc_c = ho.get('ТЦ')
-    to_c = ho.get(norm(D_TO));     tr_c = ho.get(norm(D_TRAF))
-    tv_c = ho.get('ТО/посетитель LFL')
-    kp_c = ho.get('КОП LFL')
-    ch_c = ho.get('Ср. чек LFL')
-    pa_c = ho.get('Пар в чеке LFL')
+    mc=ho.get('Магазин'); tc_c=ho.get('ТЦ')
+    to_c=ho.get(norm(D_TO)); tr_c=ho.get(norm(D_TRAF))
+    tv_c=ho.get('ТО/посетитель LFL'); kp_c=ho.get('КОП LFL')
+    ch_c=ho.get('Ср. чек LFL'); pa_c=ho.get('Пар в чеке LFL')
     if not mc: return ''
-
-    # Период
     period_str = extract_period(ws, report_type)
-    if report_type == 'week':
-        header = f"📋 Краткий анализ за неделю {period_str}"
-    else:
-        header = f"📋 Краткий анализ за месяц {period_str}"
-
-    # Пометка после ТО оборот (жирный текст через Telegram markdown)
-    if report_type in ('week', 'month_mid'):
-        to_suffix = ' *‼️ ИСПРАВИТЬ*'
-    elif report_type == 'month_full':
-        to_suffix = ' *❌ НЕ ИСПРАВЛЕНО:*'
-    else:
-        to_suffix = ''
-
+    if report_type == 'week': header = f"📋 Краткий анализ за неделю {period_str}"
+    else: header = f"📋 Краткий анализ за месяц {period_str}"
+    if report_type in ('week', 'month_mid'): to_suffix = ' *‼️ ИСПРАВИТЬ*'
+    elif report_type == 'month_full': to_suffix = ' *❌ НЕ ИСПРАВЛЕНО:*'
+    else: to_suffix = ''
     def rnd(v): return round(float(v)*1000)/10 if v is not None else None
-
     stores = []
     for r in ws.iter_rows(min_row=hrow+1, max_row=ws.max_row):
         mag = r[mc-1].value
@@ -360,50 +306,33 @@ def generate_analysis(xlsx_bytes, report_type='week'):
         if str(mag).strip() == 'Магазин': break
         try: int(str(mag))
         except: continue
-
         tc = r[tc_c-1].value if tc_c else ''
         tc_name = str(tc).split(',')[-1].strip() if tc and ',' in str(tc) else str(tc or '')
-
         to_r = rnd(r[to_c-1].value) if to_c else None
         tr_r = rnd(r[tr_c-1].value) if tr_c else None
         diff = round(to_r - tr_r, 1) if (to_r is not None and tr_r is not None) else None
         worked = diff is not None and diff >= -1.0
-
-        stores.append({
-            'mag': mag, 'tc': tc_name,
-            'worked': worked, 'diff': diff,
-            'topv': rnd(r[tv_c-1].value) if tv_c else None,
-            'kop':  rnd(r[kp_c-1].value) if kp_c else None,
-            'chek': rnd(r[ch_c-1].value) if ch_c else None,
-            'par':  rnd(r[pa_c-1].value) if pa_c else None,
-        })
-
-    not_worked  = sorted([s for s in stores if not s['worked']], key=lambda x: x['diff'] or 0)
-    worked_list = [s for s in stores if s['worked']]
-
+        stores.append({'mag':mag,'tc':tc_name,'worked':worked,'diff':diff,
+            'topv':rnd(r[tv_c-1].value) if tv_c else None,
+            'kop': rnd(r[kp_c-1].value) if kp_c else None,
+            'chek':rnd(r[ch_c-1].value) if ch_c else None,
+            'par': rnd(r[pa_c-1].value) if pa_c else None})
+    nw = sorted([s for s in stores if not s['worked']], key=lambda x: x['diff'] or 0)
+    wl = [s for s in stores if s['worked']]
     lines = [header, "", "🔴 Магазины не отработавшие трафик:"]
-
-    for s in not_worked:
+    for s in nw:
         lines += ["", f"📍 {s['mag']} {s['tc']}"]
         lines.append(f"↘️ ТО {s['diff']:+.0f}%{to_suffix}")
-        if s['topv'] is not None and s['topv'] < 0:
-            lines.append(f"👤 ТО/посетитель {s['topv']:+.0f}%")
-        if s['kop']  is not None and s['kop']  < 0:
-            lines.append(f"🛍 КОП {s['kop']:+.0f}%")
-        if s['chek'] is not None and s['chek'] < 0:
-            lines.append(f"🧾 Ср.чек {s['chek']:+.0f}%")
-        if s['par']  is not None and s['par']  < 0:
-            lines.append(f"👟 Пар в чеке {s['par']:+.0f}%")
-
-    if worked_list:
+        if s['topv'] is not None and s['topv'] < 0: lines.append(f"👤 ТО/посетитель {s['topv']:+.0f}%")
+        if s['kop']  is not None and s['kop']  < 0: lines.append(f"🛍 КОП {s['kop']:+.0f}%")
+        if s['chek'] is not None and s['chek'] < 0: lines.append(f"🧾 Ср.чек {s['chek']:+.0f}%")
+        if s['par']  is not None and s['par']  < 0: lines.append(f"👟 Пар в чеке {s['par']:+.0f}%")
+    if wl:
         lines += ["", "✅ Отработали трафик:"]
-        for s in worked_list:
-            lines.append(f"👍 {s['mag']} {s['tc']}")
-
+        for s in wl: lines.append(f"👍 {s['mag']} {s['tc']}")
     lines += ["", "💪 Хороших продаж!"]
     return '\n'.join(lines)
 
-# ── Почта ──────────────────────────────────────────────────────────────────────
 def fetch_attachment(keyword):
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
@@ -416,8 +345,7 @@ def fetch_attachment(keyword):
             subj = ''
             for part, enc in decode_header(msg.get('Subject', '')):
                 subj += part.decode(enc or 'utf-8', errors='replace') if isinstance(part, bytes) else part
-            if keyword.lower() not in subj.lower():
-                continue
+            if keyword.lower() not in subj.lower(): continue
             for part in msg.walk():
                 if part.get_content_maintype() == 'multipart': continue
                 if not part.get('Content-Disposition'): continue
@@ -433,7 +361,6 @@ def fetch_attachment(keyword):
         log.error(f'Email error: {e}')
     return None
 
-# ── Лог отправленных ──────────────────────────────────────────────────────────
 def load_sent():
     try:
         with open(SENT_LOG) as f: return json.load(f)
@@ -445,7 +372,6 @@ def mark_sent(key):
     d = load_sent(); d[key] = datetime.now().isoformat()
     with open(SENT_LOG, 'w') as f: json.dump(d, f)
 
-# ── Telegram ──────────────────────────────────────────────────────────────────
 async def send_file(bot, data, filename, caption):
     await bot.send_document(
         chat_id=TELEGRAM_CHAT_ID,
@@ -457,9 +383,7 @@ async def send_file(bot, data, filename, caption):
 async def send_text(bot, text):
     await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode='Markdown')
 
-# ── Расписание ────────────────────────────────────────────────────────────────
 def mid_month_date(year, month):
-    """15-е или 16-е если пн."""
     d = date(year, month, 15)
     return date(year, month, 16) if d.weekday() == 0 else d
 
@@ -468,22 +392,18 @@ def in_hourly_window(hour, minute):
     t = hour*60 + minute
     return any(h1*60+m1 <= t <= h2*60+m2 for h1,m1,h2,m2 in windows)
 
-# ── Главный цикл ──────────────────────────────────────────────────────────────
 async def main():
     bot  = Bot(token=TELEGRAM_TOKEN)
     log.info('Бот запущен')
-
-    # Кэш для хранения отчётов полученных до 9:00
-    cached = {}  # key -> (filename, raw_bytes)
+    cached = {}
 
     while True:
         now     = datetime.now()
         today   = now.date()
         hour    = now.hour
         minute  = now.minute
-        weekday = today.weekday()  # 0=пн
+        weekday = today.weekday()
 
-        # ══ ПОЧАСОВОЙ — отправляем сразу в окнах ══════════════════════════════
         if in_hourly_window(hour, minute):
             slot = (hour*60 + minute) // 30
             key  = f'hourly_{today}_{slot}'
@@ -497,9 +417,6 @@ async def main():
                     mark_sent(key)
                     log.info(f'Почасовой отправлен: {fn}')
 
-        # ══ ДЕНЬ/НЕДЕЛЯ/МЕСЯЦ ═════════════════════════════════════════════════
-
-        # Шаг 1: проверяем почту с 6:00 до 8:59 — кэшируем, не отправляем
         if 6 <= hour < 9 and minute < 5:
             cache_key = f'cached_{today}'
             if cache_key not in cached and not already_sent(f'day_{today}'):
@@ -513,12 +430,9 @@ async def main():
                     cached[cache_key] = result
                     log.info(f'Отчёт получен и закэширован: {result[0]}')
 
-        # Шаг 2: в 9:00 отправляем всё что накопилось
         if hour == 9 and minute < 5:
             cache_key = f'cached_{today}'
             day_key   = f'day_{today}'
-
-            # Берём из кэша или пробуем получить ещё раз
             if cache_key not in cached and not already_sent(day_key):
                 log.info('9:00 — проверяем почту напрямую...')
                 result = (
@@ -528,18 +442,13 @@ async def main():
                 )
                 if result:
                     cached[cache_key] = result
-
             if cache_key in cached and not already_sent(day_key):
                 fn, raw = cached[cache_key]
                 log.info(f'9:00 — отправляем отчёты: {fn}')
-
-                # ── ДЕНЬ (каждый день) ────────────────────────────────────────
                 processed = process_day(raw)
                 await send_file(bot, processed, f'ДЕНЬ_{fn}', '📅 Ежедневный отчёт')
                 mark_sent(day_key)
                 await asyncio.sleep(2)
-
-                # ── НЕДЕЛЯ (только понедельник) ───────────────────────────────
                 if weekday == 0:
                     week_key = f'week_{today}'
                     if not already_sent(week_key):
@@ -550,8 +459,6 @@ async def main():
                         if analysis: await send_text(bot, analysis)
                         mark_sent(week_key)
                         await asyncio.sleep(2)
-
-                # ── МЕСЯЦ — 1-е число (полный месяц) ─────────────────────────
                 if today.day == 1:
                     m1_key = f'month1_{today.year}_{today.month}'
                     if not already_sent(m1_key):
@@ -562,8 +469,6 @@ async def main():
                         if analysis: await send_text(bot, analysis)
                         mark_sent(m1_key)
                         await asyncio.sleep(2)
-
-                # ── МЕСЯЦ — 15-е (или 16-е если пн) ─────────────────────────
                 if today == mid_month_date(today.year, today.month):
                     m15_key = f'month15_{today.year}_{today.month}'
                     if not already_sent(m15_key):
@@ -573,13 +478,9 @@ async def main():
                         analysis = generate_analysis(raw, report_type='month_mid')
                         if analysis: await send_text(bot, analysis)
                         mark_sent(m15_key)
-
-                # Очищаем кэш
                 cached.pop(cache_key, None)
 
-        # Пауза: 5 мин в окне почасового, иначе 20 мин
-        sleep_min = 5 if in_hourly_window(hour, minute) else 20
-        await asyncio.sleep(sleep_min * 60)
+        await asyncio.sleep(5 * 60)
 
 if __name__ == '__main__':
     asyncio.run(main())
