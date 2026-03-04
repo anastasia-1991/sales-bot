@@ -452,7 +452,6 @@ async def send_file(bot, data, filename, caption):
         document=io.BytesIO(data),
         filename=filename,
         caption=caption,
-        mime_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
 
 async def send_text(bot, text):
