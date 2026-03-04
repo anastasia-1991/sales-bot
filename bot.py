@@ -404,15 +404,28 @@ def generate_analysis(xlsx_bytes, report_type='week'):
     return '\n'.join(lines)
 
 # ── Почта ──────────────────────────────────────────────────────────────────────
-def fetch_attachment(keyword):
+def fetch_attachment(keyword, max_age_hours=2):
     try:
+        from email.utils import parsedate_to_datetime
+        import pytz
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
         mail.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
         mail.select('INBOX')
         _, data = mail.search(None, 'UNSEEN')
+        now = datetime.now(pytz.utc)
         for mid in reversed(data[0].split()):
             _, msg_data = mail.fetch(mid, '(RFC822)')
             msg = email.message_from_bytes(msg_data[0][1])
+            # Проверяем время письма
+            date_str = msg.get('Date', '')
+            try:
+                msg_date = parsedate_to_datetime(date_str)
+                age_hours = (now - msg_date).total_seconds() / 3600
+                if age_hours > max_age_hours:
+                    log.info(f'Письмо слишком старое ({age_hours:.1f} ч), пропускаем')
+                    continue
+            except Exception:
+                pass  # если не можем распарсить дату — берём письмо
             subj = ''
             for part, enc in decode_header(msg.get('Subject', '')):
                 subj += part.decode(enc or 'utf-8', errors='replace') if isinstance(part, bytes) else part
