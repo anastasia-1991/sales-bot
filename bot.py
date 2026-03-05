@@ -408,9 +408,17 @@ def fetch_attachment(keyword):
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
         mail.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-        mail.select('INBOX')
-        _, data = mail.search(None, 'UNSEEN')
-        for mid in reversed(data[0].split()):
+        results = []
+        for folder in ['INBOX', 'Рассылки']:
+            try:
+                rv, _ = mail.select(folder)
+                if rv == 'OK':
+                    _, data = mail.search(None, 'UNSEEN')
+                    for mid in data[0].split():
+                        results.append(mid)
+            except:
+                pass
+        for mid in reversed(results):
             _, msg_data = mail.fetch(mid, '(RFC822)')
             msg = email.message_from_bytes(msg_data[0][1])
             subj = ''
