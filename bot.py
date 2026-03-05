@@ -405,37 +405,37 @@ def generate_analysis(xlsx_bytes, report_type='week'):
 
 # ── Почта ──────────────────────────────────────────────────────────────────────
 def fetch_attachment(keyword):
+    """Ищет письмо с keyword в теме поочерёдно в INBOX и Рассылки.
+    Возвращает результат сразу при первой находке — без смешивания ID папок."""
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
         mail.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-        results = []
         for folder in ['INBOX', 'Рассылки']:
             try:
                 rv, _ = mail.select(folder)
-                if rv == 'OK':
-                    _, data = mail.search(None, 'UNSEEN')
-                    for mid in data[0].split():
-                        results.append(mid)
-            except:
-                pass
-        for mid in reversed(results):
-            _, msg_data = mail.fetch(mid, '(RFC822)')
-            msg = email.message_from_bytes(msg_data[0][1])
-            subj = ''
-            for part, enc in decode_header(msg.get('Subject', '')):
-                subj += part.decode(enc or 'utf-8', errors='replace') if isinstance(part, bytes) else part
-            if keyword.lower() not in subj.lower():
-                continue
-            for part in msg.walk():
-                if part.get_content_maintype() == 'multipart': continue
-                if not part.get('Content-Disposition'): continue
-                fn = ''
-                for fp, enc in decode_header(part.get_filename() or ''):
-                    fn += fp.decode(enc or 'utf-8', errors='replace') if isinstance(fp, bytes) else fp
-                if fn.lower().endswith('.xlsx'):
-                    mail.store(mid, '+FLAGS', '\\Seen')
-                    mail.logout()
-                    return fn, part.get_payload(decode=True)
+                if rv != 'OK':
+                    continue
+                _, data = mail.search(None, 'UNSEEN')
+                for mid in reversed(data[0].split()):
+                    _, msg_data = mail.fetch(mid, '(RFC822)')
+                    msg = email.message_from_bytes(msg_data[0][1])
+                    subj = ''
+                    for part, enc in decode_header(msg.get('Subject', '')):
+                        subj += part.decode(enc or 'utf-8', errors='replace') if isinstance(part, bytes) else part
+                    if keyword.lower() not in subj.lower():
+                        continue
+                    for part in msg.walk():
+                        if part.get_content_maintype() == 'multipart': continue
+                        if not part.get('Content-Disposition'): continue
+                        fn = ''
+                        for fp, enc in decode_header(part.get_filename() or ''):
+                            fn += fp.decode(enc or 'utf-8', errors='replace') if isinstance(fp, bytes) else fp
+                        if fn.lower().endswith('.xlsx'):
+                            mail.store(mid, '+FLAGS', '\\Seen')
+                            mail.logout()
+                            return fn, part.get_payload(decode=True)
+            except Exception as folder_err:
+                log.warning(f'Папка {folder}: {folder_err}')
         mail.logout()
     except Exception as e:
         log.error(f'Email error: {e}')
@@ -471,10 +471,16 @@ def mid_month_date(year, month):
     d = date(year, month, 15)
     return date(year, month, 16) if d.weekday() == 0 else d
 
-def in_hourly_window(hour, minute):
+def get_hourly_window(hour, minute):
+    """Возвращает индекс окна (0-3) если время попадает в него, иначе None.
+    Ключ по индексу окна не меняется внутри окна, даже при пересечении границы
+    30-минутного slot'а (например 12:59→13:00 внутри окна 12:35-13:05)."""
     windows = [(12,35,13,5),(15,35,16,5),(17,55,18,25),(22,45,23,15)]
     t = hour*60 + minute
-    return any(h1*60+m1 <= t <= h2*60+m2 for h1,m1,h2,m2 in windows)
+    for i, (h1,m1,h2,m2) in enumerate(windows):
+        if h1*60+m1 <= t <= h2*60+m2:
+            return i
+    return None
 
 # ── Главный цикл ──────────────────────────────────────────────────────────────
 async def main():
@@ -492,9 +498,9 @@ async def main():
         weekday = today.weekday()  # 0=пн
 
         # ══ ПОЧАСОВОЙ — отправляем сразу в окнах ══════════════════════════════
-        if in_hourly_window(hour, minute):
-            slot = (hour*60 + minute) // 30
-            key  = f'hourly_{today}_{slot}'
+        window_idx = get_hourly_window(hour, minute)
+        if window_idx is not None:
+            key = f'hourly_{today}_{window_idx}'
             if not already_sent(key):
                 log.info('Проверяем почасовой...')
                 result = fetch_attachment('часу продаж')
