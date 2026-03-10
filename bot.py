@@ -253,9 +253,37 @@ def color_day_sheet(ws):
                 if fill: apply_fill(cell, fill)
                 else: cell.fill = NO_FILL
 
+def filter_mixed_sheet(ws):
+    """Оставляет только строки где Подразделение = 'Центр 7'."""
+    hrow = None
+    for r in ws.iter_rows():
+        for c in r:
+            if c.value and str(c.value).strip() == 'Магазин':
+                hrow = c.row; break
+        if hrow: break
+    if not hrow: return
+    hd = {norm(c.value): c.column for c in ws[hrow] if c.value}
+    pod_c = hd.get('Подразделение')
+    mag_c = hd.get('Магазин')
+    if not pod_c or not mag_c: return
+    rows_to_delete = []
+    for r in ws.iter_rows(min_row=hrow+1, max_row=ws.max_row):
+        mag = r[mag_c-1].value
+        if mag is None: continue
+        if str(mag).strip() == 'Магазин': break
+        try: int(str(mag).strip())
+        except: continue
+        pod = r[pod_c-1].value
+        if pod is None or str(pod).strip() != 'Центр 7':
+            rows_to_delete.append(r[0].row)
+    for row_num in reversed(rows_to_delete):
+        ws.delete_rows(row_num)
+
 def process_day(xlsx_bytes):
     wb = load_workbook(io.BytesIO(xlsx_bytes))
-    for sn in wb.sheetnames: color_day_sheet(wb[sn])
+    for sn in wb.sheetnames:
+        filter_mixed_sheet(wb[sn])
+        color_day_sheet(wb[sn])
     buf = io.BytesIO(); wb.save(buf); return buf.getvalue()
 
 # ── Извлечение периода из отчёта ───────────────────────────────────────────────
@@ -431,6 +459,9 @@ def fetch_attachment(keyword):
                         for fp, enc in decode_header(part.get_filename() or ''):
                             fn += fp.decode(enc or 'utf-8', errors='replace') if isinstance(fp, bytes) else fp
                         if fn.lower().endswith('.xlsx'):
+                            if 'кожа' in fn.lower():
+                                log.info(f'Пропускаем файл КОЖА: {fn}')
+                                continue
                             mail.store(mid, '+FLAGS', '\\Seen')
                             mail.logout()
                             return fn, part.get_payload(decode=True)
@@ -561,7 +592,10 @@ async def main():
                         await send_file(bot, processed_w, f'НЕДЕЛЯ_{fn}', '📅 Недельный отчёт')
                         await asyncio.sleep(1)
                         analysis = generate_analysis(raw, report_type='week')
-                        if analysis: await send_text(bot, analysis)
+                        if analysis:
+                            await send_text(bot, analysis)
+                        else:
+                            log.warning('Недельный анализ пустой — колонка "Магазин" не найдена в файле')
                         mark_sent(week_key)
                         await asyncio.sleep(2)
 
